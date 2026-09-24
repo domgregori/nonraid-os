@@ -28,8 +28,9 @@
 #   build/build-image.sh [path-to-debian-netinst.iso] [output.iso]
 #
 # With no ISO path (or a path that doesn't exist), downloads and GPG-
-# verifies the Debian 13.6.0 netinst into a local cache and uses that - the
-# ISO isn't checked into this repo (too large, not source), so the build
+# verifies whatever the current Debian 13.x netinst point release is into a
+# local cache and uses that - the ISO isn't checked into this repo (too
+# large, not source), so the build
 # needs to be able to get it itself rather than assuming a checkout
 # already has one lying around.
 #
@@ -51,7 +52,11 @@ EXTRACT_DIR="$WORK_DIR/iso"
 cleanup() { rm -rf "$WORK_DIR"; }
 trap cleanup EXIT
 
-log() { echo "==> $*"; }
+# Writes to stderr, not stdout: download_and_verify_debian_iso() below returns its
+# result via a captured stdout ($(...)), and a log() line on stdout would silently
+# end up folded into that captured value instead of the terminal - confirmed live,
+# this exact bug once log() briefly wrote to stdout during development.
+log() { echo "==> $*" >&2; }
 fail() { echo "ERROR: $*" >&2; exit 1; }
 require() { command -v "$1" >/dev/null 2>&1 || fail "'$1' not found on PATH - required to build the image."; }
 
@@ -81,25 +86,33 @@ DF9B9C49EAA9298432589D76DA87E80D6294BE9B
 F41D30342F3546695F65C66942468F4009EA8AC3
 "
 
-# Downloads a Debian ISO, verifies SHA256SUMS is authentically Debian's own
+# Downloads whichever netinst ISO is currently live at $base_url (matching
+# $iso_name_pattern, a grep -oP regex - there's exactly one *-amd64-netinst.iso
+# per Debian point release), verifies SHA256SUMS is authentically Debian's own
 # (GPG signature, checked against the pinned fingerprints above - not just
-# that the bytes match some SHA256SUMS file, which alone only guards
-# against transfer corruption, not a tampered SHA256SUMS itself), then
-# verifies the ISO's own checksum against it. Only moves the ISO to $dest
-# once all of that passes.
+# that the bytes match some SHA256SUMS file, which alone only guards against
+# transfer corruption, not a tampered SHA256SUMS itself), then verifies the
+# ISO's own checksum against it. Only moves the ISO into $dest_dir once all of
+# that passes, and prints its final path on stdout for the caller to capture.
+#
+# Never hardcodes an exact Debian point-release version (e.g. "13.6.0") -
+# confirmed live: cdimage.debian.org deletes a point release's whole
+# versioned directory once the next one ships, so a pinned version 404s the
+# very next time Debian releases a point update (which happens every few
+# months) - exactly what broke this the first time. $base_url is expected to
+# be cdimage's "current" alias, which always resolves to whatever's live
+# right now; the actual version is discovered here, from SHA256SUMS itself,
+# not assumed up front.
 download_and_verify_debian_iso() {
-  local iso_name="$1" iso_url="$2" sha256sums_url="$3" sha256sums_sig_url="$4" dest="$5"
+  local iso_name_pattern="$1" base_url="$2" dest_dir="$3"
   require gpg
 
   local work
   work="$(mktemp -d)"
 
-  log "Downloading $iso_url"
-  curl -fL --progress-bar -o "$work/$iso_name" "$iso_url"
-
-  log "Downloading SHA256SUMS and its GPG signature"
-  curl -fsSL -o "$work/SHA256SUMS" "$sha256sums_url"
-  curl -fsSL -o "$work/SHA256SUMS.sign" "$sha256sums_sig_url"
+  log "Downloading SHA256SUMS and its GPG signature from $base_url"
+  curl -fsSL -o "$work/SHA256SUMS" "$base_url/SHA256SUMS"
+  curl -fsSL -o "$work/SHA256SUMS.sign" "$base_url/SHA256SUMS.sign"
 
   log "Fetching and verifying Debian's CD signing keys"
   local gpg_home="$work/gnupg" fp key_id
@@ -120,6 +133,21 @@ download_and_verify_debian_iso() {
     || fail "GPG signature on SHA256SUMS did not verify - refusing to trust it"
   log "SHA256SUMS signature verified ($trusted trusted key(s) found)"
 
+  local iso_name dest
+  iso_name="$(grep -oP "$iso_name_pattern" "$work/SHA256SUMS" | head -1)"
+  [ -n "$iso_name" ] || fail "no file matching '$iso_name_pattern' found in SHA256SUMS from $base_url"
+  dest="$dest_dir/$iso_name"
+
+  if [ -f "$dest" ]; then
+    log "Using cached Debian netinst ISO at $dest"
+    rm -rf "$work"
+    echo "$dest"
+    return
+  fi
+
+  log "Downloading $base_url/$iso_name"
+  curl -fL --progress-bar -o "$work/$iso_name" "$base_url/$iso_name"
+
   local expected_sum actual_sum
   expected_sum="$(awk -v f="$iso_name" '$2==f {print $1}' "$work/SHA256SUMS")"
   [ -n "$expected_sum" ] || fail "$iso_name not found in SHA256SUMS"
@@ -127,28 +155,30 @@ download_and_verify_debian_iso() {
   [ "$expected_sum" = "$actual_sum" ] || fail "checksum mismatch for downloaded $iso_name (expected $expected_sum, got $actual_sum) - try again, the download may be corrupt"
   log "Checksum verified"
 
-  mkdir -p "$(dirname "$dest")"
+  mkdir -p "$dest_dir"
   mv "$work/$iso_name" "$dest"
   rm -rf "$work"
+  echo "$dest"
 }
 
 if [ -z "$SRC_ISO" ] || [ ! -f "$SRC_ISO" ]; then
   if [ -n "$SRC_ISO" ]; then
     fail "source ISO not found: $SRC_ISO"
   fi
-  DEBIAN_ISO_VERSION="13.6.0"
-  DEBIAN_ISO_NAME="debian-${DEBIAN_ISO_VERSION}-amd64-netinst.iso"
-  DEBIAN_ISO_BASE_URL="https://cdimage.debian.org/debian-cd/${DEBIAN_ISO_VERSION}/amd64/iso-cd"
-  SRC_ISO="$REPO_ROOT/.cache/$DEBIAN_ISO_NAME"
-  if [ -f "$SRC_ISO" ]; then
-    log "Using cached Debian netinst ISO at $SRC_ISO"
-  else
-    download_and_verify_debian_iso "$DEBIAN_ISO_NAME" \
-      "$DEBIAN_ISO_BASE_URL/$DEBIAN_ISO_NAME" \
-      "$DEBIAN_ISO_BASE_URL/SHA256SUMS" \
-      "$DEBIAN_ISO_BASE_URL/SHA256SUMS.sign" \
-      "$SRC_ISO"
-  fi
+  # Scoped to the 13.x line specifically, not just "whatever's live at cdimage's
+  # current/ alias": current/ tracks the latest Debian stable release, which will
+  # eventually mean Debian 14 once trixie's successor ships - and everything else
+  # here (the kernel version pin, the installer's file layout assumptions, the
+  # GTK theme's own gtkrc path - see this script's own header comment) is
+  # Debian-13-specific, not yet validated against anything newer. Pinning the
+  # pattern to 13.x means a future Debian 14 release fails this loudly (no match
+  # in SHA256SUMS) instead of silently building against an untested major
+  # version - a deliberate bump belongs in a real commit that updates this
+  # pattern once those assumptions have actually been checked, not an automatic
+  # drift.
+  SRC_ISO="$(download_and_verify_debian_iso 'debian-13\.[0-9]+\.[0-9]+-amd64-netinst\.iso' \
+    "https://cdimage.debian.org/debian-cd/current/amd64/iso-cd" \
+    "$REPO_ROOT/.cache")"
 fi
 LOGO="$REPO_ROOT/branding/logo.png"
 # Hand-edited static source images (see branding/layered/*.tiff for the

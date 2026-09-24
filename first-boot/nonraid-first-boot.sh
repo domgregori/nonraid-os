@@ -106,6 +106,17 @@ fi
 log "Running install-webui.sh"
 "$CHECKOUT_DIR/tools/install-webui.sh"
 
+# ensure_lxc_bridge() (bridges the primary NIC as br0, for LXC LAN access) isn't part of
+# install-webui.sh's own default run any more - it has no way to tell a fresh appliance apart
+# from someone's already-in-use Debian box that just hasn't customized its networking yet, so
+# that call is opt-in, left to whoever actually knows which one it is (see its own doc comment
+# there). This install image *is* that fresh-appliance case, every time - so first boot opts in
+# here, explicitly. Not fatal to first boot if it doesn't work out: ensure_lxc_bridge() already
+# self-heals via its own detached watchdog (reverts to the original interface if br0 doesn't
+# come up cleanly), so a failure here just means no br0 this boot, not a broken install.
+log "Setting up the LXC LAN bridge (br0)"
+"$CHECKOUT_DIR/tools/install-webui.sh" --step ensure_lxc_bridge || log "ensure_lxc_bridge failed - continuing without br0"
+
 log "First-boot setup complete - marking done and disabling this service"
 mkdir -p "$STATE_DIR"
 touch "$STATE_DIR/first-boot-done"

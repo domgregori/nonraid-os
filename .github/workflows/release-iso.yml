@@ -1,0 +1,56 @@
+name: Build and release NonRAID OS ISO
+
+# Runs build/build-image.sh (which downloads and GPG-verifies its own
+# Debian netinst ISO, vendors nonraid/nonraid-webui and the mergerfs/rclone
+# debs, and remasters the ISO - see that script's own comments) and
+# publishes the result as a GitHub Release asset. No VM boot-testing here -
+# that still needs a real machine, see PLAN.md.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish under (e.g. v1.0.0) - only used on a manual run; ignored on a tag push"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y xorriso imagemagick cpio git curl gnupg
+
+      - name: Build nonraid-os.iso
+        run: ./build/build-image.sh
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ inputs.tag }}" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "No tag: push a 'v*' tag, or provide one via workflow_dispatch's 'tag' input." >&2
+            exit 1
+          fi
+
+      - name: Rename ISO for the release asset
+        run: mv nonraid-os.iso "nonraid-os-${{ steps.tag.outputs.tag }}.iso"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          gh release create "$TAG" "nonraid-os-$TAG.iso" --title "$TAG" --generate-notes \
+            || gh release upload "$TAG" "nonraid-os-$TAG.iso" --clobber

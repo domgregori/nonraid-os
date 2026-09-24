@@ -1,0 +1,7 @@
+# Downloaded/verified Debian netinst ISO cache (build-image.sh fetches and
+# GPG-verifies this itself - see its download_and_verify_debian_iso())
+.cache/
+
+# Build output and logs - not shipped in the repo, built locally instead
+nonraid-os.iso
+build.log

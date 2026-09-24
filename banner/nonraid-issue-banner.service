@@ -1,0 +1,20 @@
+[Unit]
+Description=NonRAID OS console banner (regenerates /etc/issue with the dashboard URL)
+After=network-online.target nonraid-webui.service
+Wants=network-online.target
+# Ordering only, not a hard requirement - nonraid-webui.service does not
+# even exist yet during the very first boot, and this unit's own retry
+# loop (see nonraid-issue-banner.sh) is what actually waits for it to
+# start responding, not this ordering by itself.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/nonraid-issue-banner.sh
+RemainAfterExit=yes
+# The retry loop below can run up to ~30s - do not let systemd's default
+# 90s start timeout race it (harmless here since 30s < 90s, but explicit
+# for the same reason nonraid-first-boot.service sets this).
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

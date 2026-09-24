@@ -1,0 +1,21 @@
+[Unit]
+Description=NonRAID OS first-boot setup (clones and installs nonraid-webui)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/var/lib/nonraid-os/first-boot-done
+# So the console banner (see banner/) reflects a real failure instead of
+# claiming "still finishing" forever - this script's success path already
+# refreshes the banner itself at the end, but a failure exits before
+# reaching that line, so nothing would otherwise ever tell the banner.
+OnFailure=nonraid-issue-banner.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/nonraid-first-boot.sh
+RemainAfterExit=yes
+# The driver build and npm install steps it runs can take a while - do not
+# let systemd's default 90s start timeout kill it partway through.
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

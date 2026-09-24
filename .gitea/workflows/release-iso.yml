@@ -1,0 +1,83 @@
+name: Build and release NonRAID OS ISO
+
+# Same job as .github/workflows/release-iso.yml, adapted for Gitea Actions
+# (which aliases the "github.*" expression context for GitHub Actions
+# compatibility - same triggers/steps work here almost unchanged). Only the
+# actual release-publishing step differs, since the GitHub CLI (gh) doesn't
+# target arbitrary Gitea instances - that step calls Gitea's own REST API
+# with curl instead. Requires Actions to be enabled on this repo/instance.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish under (e.g. v1.0.0) - only used on a manual run; ignored on a tag push"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y xorriso imagemagick cpio git curl gnupg
+
+      - name: Build nonraid-os.iso
+        run: ./build/build-image.sh
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ inputs.tag }}" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "No tag: push a 'v*' tag, or provide one via workflow_dispatch's 'tag' input." >&2
+            exit 1
+          fi
+
+      - name: Rename ISO for the release asset
+        run: mv nonraid-os.iso "nonraid-os-${{ steps.tag.outputs.tag }}.iso"
+
+      - name: Publish Gitea Release
+        env:
+          # Gitea Actions auto-injects a repo-scoped token under this same
+          # secret name for GitHub Actions compatibility - not a real GitHub
+          # token, just the same name GitHub uses.
+          GITEA_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
+        run: |
+          create_response="$(curl -sS -X POST "$API/releases" \
+            -H "Authorization: token $GITEA_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"tag_name\": \"$TAG\", \"name\": \"$TAG\"}")"
+          release_id="$(echo "$create_response" | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9]*')"
+
+          if [ -z "$release_id" ]; then
+            # A release for this tag may already exist from a previous run of
+            # this workflow - look it up instead of failing outright. (A
+            # re-run that finds an existing release still tries to upload the
+            # same-named asset below, which Gitea will reject if it's already
+            # there - delete it manually first if you need to re-publish.)
+            lookup_response="$(curl -sS "$API/releases/tags/$TAG" -H "Authorization: token $GITEA_TOKEN")"
+            release_id="$(echo "$lookup_response" | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9]*')"
+          fi
+          if [ -z "$release_id" ]; then
+            echo "Could not create or find a release for tag $TAG" >&2
+            echo "Create response: $create_response" >&2
+            exit 1
+          fi
+
+          curl -fsSL -X POST "$API/releases/$release_id/assets?name=nonraid-os-$TAG.iso" \
+            -H "Authorization: token $GITEA_TOKEN" \
+            -F "attachment=@nonraid-os-$TAG.iso"

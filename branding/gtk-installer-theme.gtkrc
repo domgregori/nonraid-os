@@ -1,0 +1,179 @@
+# NonRAID OS dark theme for the Debian graphical installer (cdebconf-gtk-udeb).
+#
+# A recolor of the stock installer's own Clearlooks gtkrc (found at
+# usr/share/themes/Clearlooks/gtk-2.0/gtkrc inside install.amd/gtk/initrd.gz)
+# rather than a from-scratch theme: the installer initrd already ships the
+# Clearlooks engine (libclearlooks.so), so building on it keeps the same
+# widget geometry/rounding instead of falling back to GTK's bare (engine-less)
+# rendering. build/build-image.sh overwrites that file with this one; the
+# style/class/widget structure below is unchanged from Debian's original,
+# only the color values and the two GtkWidget::-level styles are new.
+# Accent color (#3F4BAC / #6C81B7) is taken from branding/grub-background.png
+# for visual consistency with the boot menu.
+
+style "clearlooks-default"
+{
+	GtkButton	::default_border	= { 0, 0, 0, 0 }
+	GtkRange	::trough_border		= 0
+	GtkPaned	::handle_size		= 6
+	GtkRange	::slider_width		= 15
+	GtkRange	::stepper_size		= 15
+
+	GtkScrollbar	::min_slider_length	= 30
+	GtkCheckButton	::indicator_size	= 14
+	GtkMenuBar	::internal-padding	= 0
+	GtkTreeView	::expander_size		= 14
+	GtkExpander	::expander_size		= 16
+	GtkScale	::slider-length		= 27
+
+	GtkButton	::child-displacement-x = 1
+	GtkButton	::child-displacement-y = 1
+
+	WnckTasklist	::fade-overlay-rect = 0
+
+	xthickness = 1
+	ythickness = 1
+
+	fg[NORMAL]		= "#e8e8e8" # light grey
+	fg[PRELIGHT]		= "#ffffff" # white
+	fg[SELECTED]		= "#ffffff" # white
+	fg[ACTIVE]		= "#e8e8e8" # light grey
+	fg[INSENSITIVE]		= "#707070" # mid grey
+
+	bg[NORMAL]		= "#242424" # dark grey
+	bg[PRELIGHT]		= "#333333" # lighter grey (hover)
+	bg[SELECTED]		= "#3f4bac" # NonRAID accent blue
+	bg[INSENSITIVE]		= "#2a2a2a" # dark grey
+	bg[ACTIVE]		= "#1a1a1a" # near-black (pressed)
+
+	base[NORMAL]		= "#1a1a1a" # near-black (entries/lists)
+	base[PRELIGHT]		= "#3f4bac" # NonRAID accent blue
+	base[ACTIVE]		= "#2f3873" # darker accent blue
+	base[SELECTED]		= "#3f4bac" # NonRAID accent blue
+	base[INSENSITIVE]	= "#242424" # dark grey
+
+	text[NORMAL]		= "#e8e8e8" # light grey
+	text[PRELIGHT]		= "#ffffff" # white
+	text[ACTIVE]		= "#ffffff" # white
+	text[SELECTED]		= "#ffffff" # white
+	text[INSENSITIVE]	= "#707070" # mid grey
+
+	engine "clearlooks"
+	{
+	menubarstyle		= 2	# 0 = flat, 1 = sunken, 2 = flat gradient
+	animation		= FALSE
+	}
+}
+
+style "clearlooks-wide" = "clearlooks-default"
+{
+	xthickness = 2
+	ythickness = 2
+}
+
+style "clearlooks-wider" = "clearlooks-default"
+{
+	xthickness = 3
+	ythickness = 3
+}
+
+style "clearlooks-button" = "clearlooks-wider"
+{
+	bg[NORMAL]	= "#2a2a2a"
+	bg[INSENSITIVE]	= "#202020"
+	bg[PRELIGHT]	= "#333333"
+}
+
+style "clearlooks-notebook" = "clearlooks-wide"
+{
+	bg[NORMAL]	= "#1e1e1e"
+	bg[INSENSITIVE] = "#1e1e1e"
+}
+
+style "clearlooks-tasklist" = "clearlooks-default"
+{
+	xthickness = 5
+	ythickness = 3
+}
+
+style "clearlooks-menu" = "clearlooks-default"
+{
+	xthickness = 2
+	ythickness = 1
+	bg[NORMAL] = "#242424"
+}
+
+style "clearlooks-menubar-item" = "clearlooks-button"
+{
+	fg[PRELIGHT] = "#ffffff"
+}
+
+style "clearlooks-menu-item" = "clearlooks-default"
+{
+	xthickness	= 2
+	ythickness	= 3
+	fg[PRELIGHT]	= "#ffffff"
+	text[PRELIGHT]	= "#ffffff"
+}
+
+style "clearlooks-tree" = "clearlooks-default"
+{
+	xthickness = 2
+	ythickness = 2
+}
+
+style "clearlooks-frame-title" = "clearlooks-default"
+{
+	fg[NORMAL] = "#b0b0b0"
+}
+
+style "clearlooks-tooltips" = "clearlooks-default"
+{
+	xthickness = 4
+	ythickness = 4
+	bg[NORMAL] = "#1a1a1a"
+}
+
+style "clearlooks-progressbar" = "clearlooks-wide"
+{
+	xthickness	= 1
+	ythickness	= 1
+	fg[PRELIGHT]	= "#ffffff"
+}
+
+style "clearlooks-combo" = "clearlooks-button"
+{
+}
+
+# widget styles
+class "GtkWidget"	style "clearlooks-default"
+class "GtkButton"	style "clearlooks-button"
+class "GtkScale"	style "clearlooks-button"
+class "GtkCombo"	style "clearlooks-button"
+class "GtkRange"	style "clearlooks-wide"
+class "GtkFrame"	style "clearlooks-wide"
+class "GtkMenu"		style "clearlooks-menu"
+class "GtkEntry"	style "clearlooks-wider"
+class "GtkMenuItem"	style "clearlooks-menu-item"
+class "GtkNotebook"	style "clearlooks-notebook"
+class "GtkProgressBar"	style "clearlooks-progressbar"
+
+widget_class "*MenuItem.*"			style "clearlooks-menu-item"
+
+# combobox stuff
+widget_class "*.GtkComboBox.GtkButton"		style "clearlooks-combo"
+widget_class "*.GtkCombo.GtkButton"		style "clearlooks-combo"
+# tooltips stuff
+widget_class "*.tooltips.*.GtkToggleButton"	style "clearlooks-tasklist"
+widget "gtk-tooltips"				style "clearlooks-tooltips"
+
+# treeview stuff
+widget_class "*.GtkTreeView.GtkButton"		style "clearlooks-tree"
+widget_class "*.GtkCTree.GtkButton"		style "clearlooks-tree"
+widget_class "*.GtkList.GtkButton"		style "clearlooks-tree"
+widget_class "*.GtkCList.GtkButton"		style "clearlooks-tree"
+widget_class "*.GtkFrame.GtkLabel"		style "clearlooks-frame-title"
+
+# notebook stuff
+widget_class "*.GtkNotebook.*.GtkEventBox"	style "clearlooks-notebook"
+widget_class "*.GtkNotebook.*.GtkViewport"	style "clearlooks-notebook"

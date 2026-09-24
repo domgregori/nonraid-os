@@ -1,0 +1,207 @@
+### NonRAID OS - Debian installer preseed
+#
+# A branded but genuinely interactive install: this answers/defaults the
+# backend stuff (locale, mirror, clock, the guided-partitioning recipe,
+# package selection, bootloader) but leaves the actual screens showing and
+# waiting for input rather than racing through unattended - including
+# hostname, root password, and partitioning (disk choice, guided-vs-manual,
+# and the final write-changes confirmation). Boot the installer with:
+#   preseed/file=/cdrom/preseed.cfg
+# build/build-image.sh sets that boot parameter automatically when it
+# remasters the ISO - deliberately without auto=true priority=critical,
+# which is what would otherwise silently apply every answer below without
+# ever showing the screen.
+
+### Localization
+d-i debian-installer/locale string en_US.UTF-8
+d-i keyboard-configuration/xkb-keymap select us
+
+### Network
+d-i netcfg/choose_interface select auto
+d-i netcfg/wireless_wep string
+d-i netcfg/get_hostname string nonraid
+
+### Mirror
+d-i mirror/country string manual
+d-i mirror/http/hostname string deb.debian.org
+d-i mirror/http/directory string /debian
+d-i mirror/http/proxy string
+
+### Clock and time zone
+d-i clock-setup/utc boolean true
+d-i time/zone string America/New_York
+d-i clock-setup/ntp boolean true
+
+### Account setup
+# Root login, no separate user account, real password typed at install time
+# (not preseeded - this is the interactive part). nonraid-webui's own
+# onboarding wizard creates the account a user actually logs into, on first
+# dashboard visit (see install-webui.sh's print_summary); root here is only
+# for emergency console/SSH access to the underlying Debian system, which
+# normal use never needs.
+#
+# Debian's installer requires a real, working login path - it does not
+# support skipping both root-login and user creation at once (confirmed
+# against a real VM run: with both disabled, it silently fell back to
+# asking for a user's full name interactively anyway). Root-login true + no
+# user is the other valid combination it does support.
+d-i passwd/root-login boolean true
+d-i passwd/make-user boolean false
+
+### Partitioning
+# The guided-partitioning recipe (regular/atomic/btrfs) is preseeded as the
+# default if guided partitioning gets chosen - but the choice of guided vs.
+# manual, which disk to use, and the final confirmation to actually write
+# changes are all real interactive prompts. Getting the disk choice wrong
+# destroys array data (see PLAN.md's open questions), so that one was
+# always going to stay interactive regardless of anything else here.
+d-i partman-auto/method string regular
+d-i partman-auto/choose_recipe select atomic
+d-i partman/default_filesystem string btrfs
+d-i partman-partitioning/confirm_write_new_label boolean true
+
+### Base system and package selection
+tasksel tasksel/first multiselect standard, ssh-server
+# openssh-server curl git are this image's own needs; everything after that
+# is nonraid-webui's tools/install-webui.sh's own dependency list (see
+# REQUIREMENTS.md there), pre-installed here during the Debian install
+# itself - guaranteed-working network, unlike first boot's - rather than
+# left for install-webui.sh to fetch live later (it's naturally idempotent,
+# so it just skips these once it sees they're already installed). Only the
+# subset install-webui.sh installs with plain default recommends - curl,
+# git, e2fsprogs, samba, and nfs-kernel-server are deliberately left out of
+# this list and still installed by install-webui.sh itself at first boot,
+# since it installs those with --no-install-recommends specifically to
+# avoid samba-ad-dc/python3-samba bloat, and pkgsel/include has no per-
+# package recommends control to preserve that here.
+d-i pkgsel/include string openssh-server curl git rsync openssl gpg dkms \
+    build-essential smartmontools hdparm hd-idle xfsprogs btrfs-progs parted \
+    acl apprise fd-find docker.io lxc lxc-templates bridge-utils \
+    avahi-daemon linux-headers-amd64
+d-i pkgsel/upgrade select safe-upgrade
+popularity-contest popularity-contest/participate boolean false
+# "Scan extra installation media?" - a routine apt-setup question with no
+# real value for a netinst image (there's only ever the one disc), so this
+# one stays skipped even though everything else here is interactive.
+d-i apt-setup/cdrom/set-first boolean false
+
+### Boot loader
+d-i grub-installer/only_debian boolean true
+d-i grub-installer/bootdev string default
+
+### Finish
+d-i finish-install/reboot_in_progress note
+
+### First boot
+# Stages this repo's first-boot script and systemd unit into the freshly
+# installed system, and enables the unit, so the very first real boot
+# finishes the job install-webui.sh does today by hand. Also stages+enables
+# the console banner (see banner/) that shows the dashboard URL before
+# login, on every boot from here on - not just the first one.
+#
+# The two `cp -a` lines above stage build/build-image.sh's vendored
+# nonraid-webui and nonraid checkouts at the exact paths
+# nonraid-first-boot.sh and install-webui.sh already expect a pre-existing
+# checkout at, so first boot has a working tree to build from even if the
+# network happens to be down or flaky right when it needs it - both
+# scripts fetch+reset to the latest on top of this if they can, see their
+# own comments.
+#
+# The `chown -R root:root` right after those two `cp -a` lines matters more
+# than it looks: build-image.sh clones these as whatever user runs the build
+# (not root), and `cp -a` preserves that numeric UID as-is onto /target. Confirmed
+# on a real VM run: without this chown, first boot's (and install-webui.sh's)
+# git commands against these checkouts run as root against a repo root
+# doesn't own, and git's dubious-ownership check refuses to touch it at all -
+# silently forcing both checkouts onto their "couldn't fetch, build from
+# what's already here" fallback path every time. For nonraid-webui that's
+# harmless (a warning, then business as usual). For nonraid it's fatal: that
+# fallback leaves the checkout on the `main` branch build-image.sh cloned
+# (never a release tag), and build_nonraid_driver's later `git describe
+# --tags --exact-match` - which is how it stamps /etc/nonraid/driver-version -
+# has nothing to match, so nonraid-first-boot.sh dies for real.
+#
+# Also allows root to log in over SSH with the password typed at install
+# time - Debian's own sshd default (PermitRootLogin prohibit-password)
+# only allows root in over SSH via a key, never a password, which would
+# otherwise make that password work at the console but silently fail over
+# SSH.
+# The block below installs nonraid-webui's remaining dependencies that
+# pkgsel/include above couldn't cover - mergerfs and rclone aren't in any
+# apt repo at all (see build/build-image.sh's vendoring step for where
+# these two .debs come from), and Node.js/Tailscale/cloudflared each need
+# their own third-party apt repo added first (cloudflared: the transport for
+# the Share Links feature - see install-webui.sh's own ensure_cloudflared(),
+# same shape as ensure_tailscale() just below it, even simpler since
+# Cloudflare publishes one universal "any" repo rather than per-codename
+# ones). Same as the vendored git checkouts above: doing this now, during
+# the Debian install, is much less likely to race a not-quite-ready-yet
+# network than first boot's - but "much less likely" isn't "never"
+# (confirmed against a real VM run: NodeSource's setup script failed
+# transiently here too), so the three `bash -c` blocks below retry
+# themselves, the same bounded-retry pattern nonraid-first-boot.sh already
+# uses for its own git clone. They also deliberately avoid `curl ... | bash
+# -` (curl straight into a pipe): a failed curl there still leaves `bash -`
+# with nothing to run but empty stdin, which exits 0 as a trivially-
+# successful no-op - silently masking exactly the kind of transient failure
+# being retried for. Fetching to a file first and running that as a separate
+# command keeps curl's own exit status visible to the retry loop instead.
+#
+# Unlike the vendored git checkouts, install-webui.sh's own
+# ensure_mergerfs/ensure_node/ensure_tailscale calls at first boot don't
+# need any special "did this get pre-seeded" branch to take advantage of
+# this - they're already idempotent (check what's installed, skip if it's
+# already new enough), so they just see everything already done and skip
+# straight through. One real gap this surfaced: ensure_node() only checks
+# `node -v` against the version floor, not that npm actually exists -
+# Debian's own nodejs package (no bundled npm, unlike NodeSource's) happens
+# to satisfy that floor, so if the NodeSource step above ever silently
+# fails and apt-get falls through to Debian's package instead, first boot
+# won't catch it either; a real fix belongs in nonraid-webui itself, not
+# here.
+#
+# The `sed` line right below is the first thing that runs here, before
+# anything else touches apt: the installer only comments out the target's
+# `deb cdrom:...` sources.list entry as one of its own very last steps,
+# which is after late_command already ran - so at this point that entry is
+# still active. Confirmed on a real VM run: with it still active, any
+# `apt-get update` here (including the one NodeSource's setup script below
+# runs on its own) errors on that entry ("Please use apt-cdrom..."), and a
+# bug in that script means it doesn't treat that as fatal - it logs the
+# error and still exits 0, but never actually registers its repo, so the
+# `apt-get install nodejs` two lines later silently grabs Debian's own
+# (npm-less) nodejs package instead. Disabling it ourselves here, this
+# early, means every apt operation below (this and the Tailscale block, and
+# their plain `apt-get install` calls) sees exactly the sources.list the
+# installer would have left behind anyway, just sooner.
+d-i preseed/late_command string \
+    sed -i 's/^deb cdrom:/#deb cdrom:/' /target/etc/apt/sources.list; \
+    mkdir -p /target/opt; \
+    cp -a /cdrom/nonraid-os/vendor/nonraid-webui /target/opt/nonraid-webui-src; \
+    mkdir -p /target/usr/src; \
+    cp -a /cdrom/nonraid-os/vendor/nonraid /target/usr/src/nonraid; \
+    in-target chown -R root:root /opt/nonraid-webui-src /usr/src/nonraid; \
+    mkdir -p /target/opt/nonraid-os-debs; \
+    cp /cdrom/nonraid-os/vendor/debs/mergerfs.deb /target/opt/nonraid-os-debs/; \
+    in-target apt-get install -y /opt/nonraid-os-debs/mergerfs.deb; \
+    cp /cdrom/nonraid-os/vendor/debs/rclone.deb /target/opt/nonraid-os-debs/; \
+    in-target apt-get install -y /opt/nonraid-os-debs/rclone.deb; \
+    in-target bash -c 'exec >>/var/log/nonraid-os-late-command.log 2>&1; echo "=== NodeSource setup: $(date) ==="; i=0; while ! (curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource-setup.sh && timeout 60 bash /tmp/nodesource-setup.sh); do rc=$?; i=$((i+1)); [ "$i" -lt 5 ] || { echo "NodeSource setup failed after $i attempts (exit $rc)"; exit 1; }; echo "NodeSource setup failed (attempt $i/5, exit $rc) - retrying in 5s"; sleep 5; done'; \
+    in-target apt-get install -y nodejs; \
+    in-target install -d -m 0755 /usr/share/keyrings; \
+    in-target bash -c 'exec >>/var/log/nonraid-os-late-command.log 2>&1; echo "=== Tailscale repo setup: $(date) ==="; i=0; while ! (curl -fsSL https://pkgs.tailscale.com/stable/debian/trixie.noarmor.gpg -o /usr/share/keyrings/tailscale-archive-keyring.gpg && curl -fsSL https://pkgs.tailscale.com/stable/debian/trixie.tailscale-keyring.list -o /etc/apt/sources.list.d/tailscale.list); do i=$((i+1)); [ "$i" -lt 5 ] || { echo "Tailscale repo setup failed after $i attempts"; exit 1; }; echo "Tailscale repo setup failed (attempt $i/5) - retrying in 5s"; sleep 5; done'; \
+    in-target apt-get update; \
+    in-target apt-get install -y tailscale; \
+    in-target systemctl disable tailscaled; \
+    in-target bash -c 'exec >>/var/log/nonraid-os-late-command.log 2>&1; echo "=== Cloudflared repo setup: $(date) ==="; i=0; while ! curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg; do i=$((i+1)); [ "$i" -lt 5 ] || { echo "Cloudflared repo setup failed after $i attempts"; exit 1; }; echo "Cloudflared repo setup failed (attempt $i/5) - retrying in 5s"; sleep 5; done; echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" >/etc/apt/sources.list.d/cloudflared.list'; \
+    in-target apt-get update; \
+    in-target apt-get install -y cloudflared; \
+    cp /cdrom/nonraid-os/first-boot/nonraid-first-boot.sh /target/usr/local/sbin/nonraid-first-boot.sh; \
+    chmod 755 /target/usr/local/sbin/nonraid-first-boot.sh; \
+    cp /cdrom/nonraid-os/first-boot/nonraid-first-boot.service /target/etc/systemd/system/nonraid-first-boot.service; \
+    in-target systemctl enable nonraid-first-boot.service; \
+    echo 'PermitRootLogin yes' > /target/etc/ssh/sshd_config.d/nonraid-root-login.conf; \
+    cp /cdrom/nonraid-os/banner/nonraid-issue-banner.sh /target/usr/local/sbin/nonraid-issue-banner.sh; \
+    chmod 755 /target/usr/local/sbin/nonraid-issue-banner.sh; \
+    cp /cdrom/nonraid-os/banner/nonraid-issue-banner.service /target/etc/systemd/system/nonraid-issue-banner.service; \
+    in-target systemctl enable nonraid-issue-banner.service
